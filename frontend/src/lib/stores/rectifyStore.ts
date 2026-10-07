@@ -5,6 +5,7 @@
  */
 import { derived, get, writable } from 'svelte/store'
 import { db, watchTable } from '$lib/utils/db'
+import { logFieldChange } from '$lib/utils/fieldJournal'
 import type { Verdict, VerdictResult } from '$lib/types/verdict'
 import { defaultBasis, judgePoint } from '$lib/types/verdict'
 import type { Rectify, RectifyFilterState, RectifyState } from '$lib/types/rectify'
@@ -251,6 +252,7 @@ export async function generateRectifies(options: {
     created += 1
   })
   if (records.length > 0) await db.rectifies.bulkPut(records)
+  for (const record of records) await logFieldChange('rectify', 'create', record.id)
   // 同步刷新判定人信息，保证导出结论有检测人署名
   for (const row of rows) {
     if (row.verdict && !row.verdict.inspector) {
@@ -269,11 +271,13 @@ export async function createRectify(payload: Omit<Rectify, 'id' | 'createdAt' | 
     updatedAt: now
   }
   await db.rectifies.put(row)
+  await logFieldChange('rectify', 'create', row.id)
   return row
 }
 
 export async function updateRectify(id: string, patch: Partial<Rectify>): Promise<void> {
   await db.rectifies.update(id, { ...patch, updatedAt: Date.now() } as never)
+  await logFieldChange('rectify', 'update', id)
 }
 
 /** 推进整改状态机（校验合法流转） */
@@ -281,12 +285,13 @@ export async function transitionRectify(id: string, next: RectifyState): Promise
   const current = get(rectifyList).find((item) => item.id === id)
   if (!current) return false
   if (!canTransition(current.state, next)) return false
-  await db.rectifies.update(id, { state: next, updatedAt: Date.now() } as never)
+  await updateRectify(id, { state: next })
   return true
 }
 
 export async function removeRectify(id: string): Promise<void> {
   await db.rectifies.delete(id)
+  await logFieldChange('rectify', 'delete', id)
 }
 
 /** 导出「检测结论 + 整改建议」文本（供备份页复制） */

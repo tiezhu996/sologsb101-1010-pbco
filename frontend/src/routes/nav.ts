@@ -17,5 +17,6 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/devices', label: '防雷装置登记', badgeHint: '防雷装置数量' },
   { path: '/points', label: '接地电阻测点', badgeHint: '测点数量' },
   { path: '/verdicts', label: '合格判定与整改', badgeHint: '不合格测点数量' },
+  { path: '/offline', label: '外业并回', badgeHint: '待确认冲突数量' },
   { path: '/backup', label: '结论与备份', badgeHint: '数据备份' }
 ]

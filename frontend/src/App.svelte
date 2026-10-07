@@ -15,6 +15,7 @@
   import { buildingList, buildingReady, deviceList } from '$lib/stores/buildingStore.ts'
   import { pointList } from '$lib/stores/pointStore.ts'
   import { rectifyList } from '$lib/stores/rectifyStore.ts'
+  import { importRunList } from '$lib/stores/offlineSyncStore.ts'
   import { DB_NAME, DB_VERSION } from '$lib/utils/db.ts'
   import { qualifyRate, isQualified } from '$lib/utils/resistance.ts'
 
@@ -28,6 +29,10 @@
   const unqualifiedCount = $derived($pointList.filter((point) => !isQualified(point.measuredOhm, point.limitOhm)).length)
   const rate = $derived(qualifyRate($pointList.map((point) => isQualified(point.measuredOhm, point.limitOhm))))
   const pendingRectify = $derived($rectifyList.filter((rectify) => rectify.state !== '已复检').length)
+  /** 待确认冲突（两侧都改过）+ 写入失败暂停的导入数，作为外业并回徽标 */
+  const pendingSync = $derived(
+    $importRunList.filter((run) => run.status === 'pending' || run.status === 'paused').length
+  )
 
   /** 导航高亮：根路径也算建筑物台账 */
   function isActive(path: string): boolean {
@@ -67,6 +72,8 @@
             <em class="app-nav__badge">{pointCount}</em>
           {:else if item.path === '/verdicts'}
             <em class="app-nav__badge">{unqualifiedCount}</em>
+          {:else if item.path === '/offline'}
+            {#if pendingSync > 0}<em class="app-nav__badge">{pendingSync}</em>{/if}
           {/if}
         </a>
       {/each}

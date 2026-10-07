@@ -10,6 +10,7 @@
  */
 import { derived, get, writable } from 'svelte/store'
 import { db, readLastBuildingId, watchTable, writeLastBuildingId } from '$lib/utils/db'
+import { logFieldChange } from '$lib/utils/fieldJournal'
 import type { Building, BuildingFilterState } from '$lib/types/building'
 import { createEmptyBuildingFilter } from '$lib/types/building'
 import type { Device, DeviceFilterState } from '$lib/types/device'
@@ -124,18 +125,20 @@ export async function createBuilding(payload: Omit<Building, 'id' | 'createdAt' 
     updatedAt: now
   }
   await db.buildings.put(row)
+  await logFieldChange('building', 'create', row.id)
   return row
 }
 
 export async function updateBuilding(id: string, patch: Partial<Building>): Promise<void> {
   await db.buildings.update(id, { ...patch, updatedAt: Date.now() } as never)
+  await logFieldChange('building', 'update', id)
 }
 
 /** 删除建筑物：级联删除其装置、测点、判定与整改建议 */
 export async function removeBuilding(id: string): Promise<void> {
   await db.transaction(
     'rw',
-    [db.buildings, db.devices, db.points, db.verdicts, db.rectifies],
+    [db.buildings, db.devices, db.points, db.verdicts, db.rectifies, db.fieldLogs, db.offlineState],
     async () => {
       const deviceIds = (await db.devices.where('buildingId').equals(id).toArray()).map((row) => row.id)
       if (deviceIds.length > 0) {
@@ -148,6 +151,8 @@ export async function removeBuilding(id: string): Promise<void> {
       }
       await db.rectifies.where('buildingId').equals(id).delete()
       await db.buildings.delete(id)
+      // 外业流水：子对象由「建筑物删除」级联带出，规划期沿引用级联对账，只记父对象一条
+      await logFieldChange('building', 'delete', id)
     }
   )
   if (get(currentBuildingId) === id) selectBuilding(null)
@@ -164,21 +169,24 @@ export async function createDevice(payload: Omit<Device, 'id' | 'createdAt' | 'u
     updatedAt: now
   }
   await db.devices.put(row)
+  await logFieldChange('device', 'create', row.id)
   return row
 }
 
 export async function updateDevice(id: string, patch: Partial<Device>): Promise<void> {
   await db.devices.update(id, { ...patch, updatedAt: Date.now() } as never)
+  await logFieldChange('device', 'update', id)
 }
 
 /** 删除装置：级联删除其测点与判定 */
 export async function removeDevice(id: string): Promise<void> {
-  await db.transaction('rw', [db.devices, db.points, db.verdicts], async () => {
+  await db.transaction('rw', [db.devices, db.points, db.verdicts, db.fieldLogs, db.offlineState], async () => {
     const pointIds = (await db.points.where('deviceId').equals(id).toArray()).map((row) => row.id)
     if (pointIds.length > 0) {
       await db.verdicts.where('pointId').anyOf(pointIds).delete()
       await db.points.bulkDelete(pointIds)
     }
     await db.devices.delete(id)
+    await logFieldChange('device', 'delete', id)
   })
 }

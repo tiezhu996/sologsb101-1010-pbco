@@ -7,6 +7,7 @@
  */
 import { derived, get, writable } from 'svelte/store'
 import { db, watchTable } from '$lib/utils/db'
+import { logFieldChange } from '$lib/utils/fieldJournal'
 import type { Point, PointDraft } from '$lib/types/point'
 import { createEmptyPointDraft } from '$lib/types/point'
 import { deviceList } from '$lib/stores/buildingStore'
@@ -82,24 +83,28 @@ export async function createPoint(
     updatedAt: now
   }
   await db.points.put(row)
+  await logFieldChange('point', 'create', row.id)
   return row
 }
 
 export async function updatePoint(id: string, patch: Partial<Point>): Promise<void> {
   await db.points.update(id, { ...patch, updatedAt: Date.now() } as never)
+  await logFieldChange('point', 'update', id)
 }
 
 /** 删除测点：同时删除其判定记录 */
 export async function removePoint(id: string): Promise<void> {
-  await db.transaction('rw', [db.points, db.verdicts], async () => {
+  await db.transaction('rw', [db.points, db.verdicts, db.fieldLogs, db.offlineState], async () => {
     await db.verdicts.where('pointId').equals(id).delete()
     await db.points.delete(id)
+    await logFieldChange('point', 'delete', id)
   })
 }
 
 /** 批量改写某装置全部测点的实测电阻（批量录入场景） */
 export async function bulkSetMeasured(deviceId: string, measuredOhm: number): Promise<number> {
   const now = Date.now()
+  const targets = pointsOfDevice(deviceId)
   await db.points
     .where('deviceId')
     .equals(deviceId)
@@ -107,7 +112,8 @@ export async function bulkSetMeasured(deviceId: string, measuredOhm: number): Pr
       point.measuredOhm = measuredOhm
       point.updatedAt = now
     })
-  return pointsOfDevice(deviceId).length
+  for (const point of targets) await logFieldChange('point', 'update', point.id)
+  return targets.length
 }
 
 /** 批量导入解析后的粘贴行（替换该装置原有测点） */
@@ -129,11 +135,16 @@ export async function importPointRows(
     createdAt: now + index,
     updatedAt: now + index
   }))
-  await db.transaction('rw', [db.points, db.verdicts], async () => {
+  await db.transaction('rw', [db.points, db.verdicts, db.fieldLogs, db.offlineState], async () => {
     const oldIds = (await db.points.where('deviceId').equals(deviceId).toArray()).map((row) => row.id)
-    if (oldIds.length > 0) await db.verdicts.where('pointId').anyOf(oldIds).delete()
+    if (oldIds.length > 0) {
+      await db.verdicts.where('pointId').anyOf(oldIds).delete()
+      // 外业场景：整装置测点被粘贴内容替换，旧测点按删除入流水（判定随测点级联重算）
+      for (const oldId of oldIds) await logFieldChange('point', 'delete', oldId)
+    }
     await db.points.where('deviceId').equals(deviceId).delete()
     await db.points.bulkPut(records)
+    for (const point of records) await logFieldChange('point', 'create', point.id)
   })
   return records.length
 }

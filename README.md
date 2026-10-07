@@ -28,7 +28,7 @@ docker compose up -d --build      # 修改代码后重新构建
 | --- | --- | --- |
 | 框架 | Svelte 5（runes：`$state` / `$derived` / `$props` / `$effect`） | 页面组件使用 `lang="ts"` |
 | 语言 | TypeScript 5.7 | 构建脚本执行 `svelte-check --tsconfig ./tsconfig.json` |
-| 路由 | svelte-spa-router 5 | hash 路由，`/buildings`、`/devices`、`/points`、`/verdicts`、`/backup` |
+| 路由 | svelte-spa-router 5 | hash 路由，`/buildings`、`/devices`、`/points`、`/verdicts`、`/offline`、`/backup` |
 | 样式 | Tailwind CSS 4（`@tailwindcss/vite`）+ 自定义组件类 | 主题变量走 `@theme` |
 | 状态管理 | Svelte store（`writable` / `derived`） | `buildingStore`、`pointStore`、`rectifyStore` |
 | 持久化 | Dexie 4（IndexedDB，库名 `gblightprot`） | 结构版本 v2 + upgrade 迁移 + liveQuery 订阅 |
@@ -43,6 +43,7 @@ docker compose up -d --build      # 修改代码后重新构建
 | `/devices` | 接闪器/引下线/接地装置登记 | Device、Building、Point | 登记类型、材质、规格、数量与安装日期，按建筑物与类型筛选，展开查看该装置全部测点 |
 | `/points` | 接地电阻测点录入 | Point、Device | 逐点录实测电阻与限值、批量改写、批量粘贴导入（`编号,位置,实测[,限值]`） |
 | `/verdicts` | 合格判定与整改建议 | Verdict、Point、Rectify | 自动初判（实测 ≤ 限值）、检测人确认生效、批量改判、由不合格判定批量生成整改建议、整改状态机（待整改→已整改→已复检） |
+| `/offline` | 外业离线采集并回 | Building、Device、Point、Rectify、Verdict | 出发前导出带对象引用与主档案基线的离线包，外业增删改入操作流水；回单位按「基线 / 两侧现状」三方对账：单边改动直接应用、两边都改过留待确认、补录对象重编编号并沿用引用；实测值改动按最新限值重算判定且整改跟踪状态保留；同包幂等、缺引用整包退回、写入失败断点续跑或按恢复点回滚 |
 | `/backup` | 检测结论与结构版本导出 | 全部模型 | 按建筑物出检测结论、全部测点判定一览、全量 JSON 导入导出（覆盖 / 追加两种模式）、清空重建演示数据 |
 
 > 深层 id 场景：本项目的列表与明细集中在同一组路由（建筑物 → 装置 → 测点 → 判定 → 结论），不存在 `/xxx/:id/yyy` 形式的层级深链；筛选条件通过 query 传递（例如 `/points?device=dev_oil_belt`），刷新后仍可复现当前视图。若 query 指向的装置已被删除，页面自动回落到全部测点并给出空态引导，不会白屏。
@@ -72,17 +73,19 @@ sologsb101-1010/
         ├── App.svelte            # 顶部导航（link action）+ 页脚数据概览
         ├── app.css               # Tailwind 入口 + 主题变量 + 通用组件类
         ├── lib/
-        │   ├── types/            # building / device / point / verdict / rectify
-        │   ├── stores/           # buildingStore / pointStore / rectifyStore
+        │   ├── types/            # building / device / point / verdict / rectify / offline
+        │   ├── stores/           # buildingStore / pointStore / rectifyStore / offlineSyncStore
         │   ├── components/common/# QualifyTag / FilterBar / StatBadge / EmptyPanel
         │   ├── hooks/            # useIdbTable / useQualifyRate
-        │   └── utils/            # resistance.ts / db.ts / export.ts / query.ts
+        │   └── utils/            # resistance / db / export / query（台账）
+        │                        # fieldJournal / reconcile / offlineSync / renumber / location（外业并回）
         └── routes/
-            ├── index.ts          # 路由表（svelte-spa-router 的 route 映射）
+            ├── index.ts          # 路由表映射
             ├── BuildingList.svelte
             ├── DeviceList.svelte
             ├── PointEntry.svelte
             ├── VerdictBoard.svelte
+            ├── OfflineSync.svelte
             └── BackupView.svelte
 ```
 
@@ -98,11 +101,20 @@ npm run preview    # 预览构建产物
 
 ## 六、数据存储说明
 
-- **存储位置**：浏览器 IndexedDB，库名 `gblightprot`，当前结构版本 `v2`。所有读写经 `frontend/src/lib/utils/db.ts` 与 hooks 封装，组件不直接触碰 Dexie 实例。
-- **数据表**：`buildings`（建筑物）、`devices`（防雷装置）、`points`（接地电阻测点）、`verdicts`（合格判定）、`rectifies`（整改建议）。
-- **升级迁移**：`db.version(1)` 保留初版结构，`db.version(2).stores(...).upgrade(...)` 补齐索引并回填历史数据缺失的时间戳、限值、判定确认标记；调整字段结构时递增 `DB_VERSION` 并补迁移。
+- **存储位置**：浏览器 IndexedDB，库名 `gblightprot`，当前结构版本 `v3`。所有读写经 `frontend/src/lib/utils/db.ts` 与 hooks 封装，组件不直接触碰 Dexie 实例。
+- **数据表**：业务表 `buildings`（建筑物）、`devices`（防雷装置）、`points`（接地电阻测点）、`verdicts`（合格判定）、`rectifies`（整改建议）；同步内部表 `fieldLogs`（外业操作流水）、`offlineState`（活动作业与基线）、`importRuns`（导入对账计划、断点游标、导入前恢复点）。
+- **升级迁移**：`db.version(1)` 保留初版结构，`db.version(2)` 补齐索引并回填历史数据缺失的时间戳、限值、判定确认标记，`db.version(3)` 新增外业并回的三张同步内部表；调整字段结构时递增 `DB_VERSION` 并补迁移。
 - **首屏播种**：`initDatabase()` 在 `buildings` 表为空时执行幂等播种，生成三层互相引用的演示数据（3 栋建筑物 / 6 个防雷装置 / 9 个测点 / 9 条判定 / 2 条整改建议），其中既有合格样本也有超限样本，便于演示挂红、整改与结论导出。
 - **实时同步**：`utils/db.ts` 的 `watchTable()` 基于 Dexie `liveQuery` 订阅表变化，Svelte store 自动刷新，页面用 `$store` 只读订阅。
 - **判定规则**：实测电阻 ≤ 限值判合格；限值初始值按防雷类别与装置类型建议（一类/二类接地装置 4 Ω，其余 10 Ω），最终以设计文件与规范条款为准。
 - **备份与恢复**：`/backup` 页可导出包含五张表的 JSON 快照，支持「覆盖导入」与「追加导入（重新分配 id）」；备份时间写入 `localStorage`，页脚与备份页均展示结构版本号。
+- **外业离线并回**（`/offline`）：
+  1. 出发前点「导出离线包」冻结主档案基线（五表快照 + 包编号 `pkgId`），之后台账页的增 / 改 / 删写入 `fieldLogs` 操作流水；
+  2. 平板全程离线采集建筑物、防雷装置、测点与整改单；
+  3. 回单位「封盘并下载离线包」，包内含基线、平板现状与流水；
+  4. 导入时按基线与两侧现状三方对账——离线单边改过的直接应用，两边都改过（含一边删除）的留成「待确认」逐条采用主档案或离线值；
+  5. 外业补录对象在导入时重编主键、补录测点编号在同装置内顺延避让，`buildingId / deviceId / pointId` 引用关系沿原关系重映射；
+  6. 接地电阻实测值改动后，判定按主档案测点的最新限值重算结果与依据，原判定身份 / 检测人沿用，原整改单跟踪状态原样保留；
+  7. 同一个包（`pkgId`）重复导入只算一次；离线记录缺建筑物或测点引用时整包退回（业务数据零写入）并留下退回记录；
+  8. 导入前自动保存五表恢复点，动作分批事务写入并记录断点游标：写入失败后「已处理记录与恢复点留下」，可从断点继续，也可一键整体回滚到导入前状态。
 - **离线可用**：应用为纯静态资源，无任何网络请求；换浏览器或清空站点数据后数据不跟随，需通过 JSON 备份迁移。

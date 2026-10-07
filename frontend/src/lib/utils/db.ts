@@ -14,10 +14,11 @@ import type { Verdict } from '$lib/types/verdict'
 import { defaultBasis, judgePoint } from '$lib/types/verdict'
 import type { Rectify } from '$lib/types/rectify'
 import { SUGGESTION_TEMPLATES } from '$lib/types/rectify'
+import type { FieldLogRow, ImportRun, OfflineStateRow } from '$lib/types/offline'
 import { suggestLimitOhm } from '$lib/utils/resistance'
 
 /** 当前数据结构版本号：每次调整字段结构必须 +1 并补迁移 */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 /** 数据库名（浏览器 IndexedDB 中的库名） */
 export const DB_NAME = 'gblightprot'
@@ -47,6 +48,12 @@ export class LightProtDatabase extends Dexie {
   points!: Table<Point, string>
   verdicts!: Table<Verdict, string>
   rectifies!: Table<Rectify, string>
+  /** 外业作业期间的操作流水（append-only），封包时读出并清空 */
+  fieldLogs!: Table<FieldLogRow, number>
+  /** 当前外业作业的基线与作业状态（最多一行：OFFLINE_STATE_ID） */
+  offlineState!: Table<OfflineStateRow, string>
+  /** 离线包导入运行记录：基线对账计划、断点游标、导入前恢复点 */
+  importRuns!: Table<ImportRun, string>
 
   constructor() {
     super(DB_NAME)
@@ -90,6 +97,19 @@ export class LightProtDatabase extends Dexie {
             })
         }
       })
+
+    // v3：外业离线并回——作业流水、作业基线状态、导入运行记录（断点 / 恢复点）
+    // 三张表均为同步机制的内部表，不参与业务台账展示；无历史数据需要回填。
+    this.version(DB_VERSION).stores({
+      buildings: 'id, name, usage, protectionClass, floors, heightM, updatedAt',
+      devices: 'id, buildingId, type, material, spec, quantity, installDate, updatedAt',
+      points: 'id, deviceId, code, measuredOhm, limitOhm, measureDate, updatedAt',
+      verdicts: 'id, pointId, result, confirmed, verdictDate, updatedAt',
+      rectifies: 'id, buildingId, pointId, state, deadline, updatedAt',
+      fieldLogs: '++seq, pkgId, entity, op, at',
+      offlineState: 'id, pkgId, checkedOutAt',
+      importRuns: 'id, status, importedAt'
+    })
   }
 }
 
@@ -444,7 +464,11 @@ export async function initDatabase(): Promise<void> {
   stampDbVersion()
 }
 
-/** 清空全部业务表（导入覆盖与重置共用） */
+/**
+ * 清空全部业务表（导入覆盖与重置共用）。
+ * 不清同步内部表（fieldLogs / offlineState / importRuns）：导入恢复点与断点
+ * 必须能在业务数据被覆盖后仍然存活，否则无法回滚或从断点继续。
+ */
 export async function clearAllTables(): Promise<void> {
   await db.transaction('rw', [db.buildings, db.devices, db.points, db.verdicts, db.rectifies], async () => {
     await Promise.all([
@@ -457,9 +481,24 @@ export async function clearAllTables(): Promise<void> {
   })
 }
 
-/** 清空并重新播种演示数据 */
+/** 清空并重新播种演示数据（重置场景：同步内部表一并清空） */
 export async function resetDatabase(): Promise<void> {
-  await clearAllTables()
+  await db.transaction(
+    'rw',
+    [db.buildings, db.devices, db.points, db.verdicts, db.rectifies, db.fieldLogs, db.offlineState, db.importRuns],
+    async () => {
+      await Promise.all([
+        db.buildings.clear(),
+        db.devices.clear(),
+        db.points.clear(),
+        db.verdicts.clear(),
+        db.rectifies.clear(),
+        db.fieldLogs.clear(),
+        db.offlineState.clear(),
+        db.importRuns.clear()
+      ])
+    }
+  )
   await seedDemoData()
 }
 
