@@ -14,10 +14,11 @@ import type { Verdict } from '$lib/types/verdict'
 import { defaultBasis, judgePoint } from '$lib/types/verdict'
 import type { Rectify } from '$lib/types/rectify'
 import { SUGGESTION_TEMPLATES } from '$lib/types/rectify'
+import type { ImportRun, ImportSnapshot, OfflineSession } from '$lib/types/offline'
 import { suggestLimitOhm } from '$lib/utils/resistance'
 
 /** 当前数据结构版本号：每次调整字段结构必须 +1 并补迁移 */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 /** 数据库名（浏览器 IndexedDB 中的库名） */
 export const DB_NAME = 'gblightprot'
@@ -47,6 +48,12 @@ export class LightProtDatabase extends Dexie {
   points!: Table<Point, string>
   verdicts!: Table<Verdict, string>
   rectifies!: Table<Rectify, string>
+  /** 平板离线会话：出发前基线 + 外业现状 */
+  offlineSessions!: Table<OfflineSession, string>
+  /** 离线包导入批次（主键 packageId，天然去重；计划 / 冲突 / 断点都存在这里） */
+  importRuns!: Table<ImportRun, string>
+  /** 导入前主档案恢复点：写入失败或人工回滚时恢复到导入前状态 */
+  importSnapshots!: Table<ImportSnapshot, string>
 
   constructor() {
     super(DB_NAME)
@@ -90,6 +97,16 @@ export class LightProtDatabase extends Dexie {
             })
         }
       })
+
+    // v3：离线采集并回支撑表（不改动既有五表结构，无需 upgrade 回填）
+    // - offlineSessions：平板侧离线会话，主键为 packageId
+    // - importRuns：导入批次（去重 / 断点 / 冲突 / 恢复点指针）
+    // - importSnapshots：导入前主档案快照（恢复点）
+    this.version(DB_VERSION).stores({
+      offlineSessions: 'id, packageId, name, exportedAt',
+      importRuns: 'id, packageName, status, phase, importedAt, completedAt',
+      importSnapshots: 'id, packageId, runId, createdAt'
+    })
   }
 }
 

@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
     "preview": "vite preview --port 22810",
-    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test:reconcile": "tsx scripts/test-reconcile.ts",
+    "test:import": "tsx scripts/test-import.ts"
   },
   "dependencies": {
     "dexie": "^4.0.11"
@@ -17,9 +19,11 @@
     "@sveltejs/vite-plugin-svelte": "^5.1.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^22.20.4",
+    "fake-indexeddb": "^6.2.5",
     "svelte": "^5.20.0",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.1.14",
+    "tsx": "^4.23.15",
     "typescript": "~5.7.3",
     "vite": "^6.1.0"
   }

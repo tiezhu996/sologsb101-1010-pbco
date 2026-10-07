@@ -7,6 +7,7 @@
   import EmptyPanel from '$lib/components/common/EmptyPanel.svelte'
   import StatBadge from '$lib/components/common/StatBadge.svelte'
   import QualifyTag from '$lib/components/common/QualifyTag.svelte'
+  import OfflinePanel from '$lib/components/common/OfflinePanel.svelte'
   import { buildingList, deviceList } from '$lib/stores/buildingStore.ts'
   import { pointList } from '$lib/stores/pointStore.ts'
   import { qualifyStats, rectifyList } from '$lib/stores/rectifyStore.ts'
@@ -257,6 +258,16 @@
         </tbody>
       </table>
     {/if}
+  </div>
+
+  <div class="gb-panel">
+    <div class="gb-panel-title">
+      <h3>外业离线采集与并回主档案</h3>
+      <span class="gb-hint">
+        出发前导出带基线与引用的离线包 → 平板离线补录 → 回单位三方对账并回（单边改动直接应用、两边都改留待确认）
+      </span>
+    </div>
+    <OfflinePanel />
   </div>
 
   <div class="gb-panel">
